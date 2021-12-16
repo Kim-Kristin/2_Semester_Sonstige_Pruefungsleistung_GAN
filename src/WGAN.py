@@ -63,3 +63,19 @@ NUM_EPOCH = 20  # Anzahl der Epochen
 LR = 0.00005  # Learningrate
 LATENT_SIZE = 100  # Radom Input für den Generator
 N_CRTIC = 5
+
+
+# https://jovian.ai/ahmadyahya11/pytorch-gans-anime
+# Ordner für den Download anlegen
+data_dir = '../data/'
+os.makedirs(data_dir, exist_ok=True)  # Anlegen eines Ordners für Bilder
+
+# Erklärung zum Umgang mit Opendata und Kaggle - https://pypi.org/project/opendatasets/
+# Datensatz:Anime-Faces werden von Kaggle geladen
+# Hierfür wird der User-API-KEY benötigt
+# APIKEY {"username":"kimmhl","key":"f585163b4ee30f0a5b44b1a902dc56e6"}
+dataset_url = 'https://www.kaggle.com/splcher/animefacedataset'
+# Images werden in './animefacedataset' gespeichert
+od.download(dataset_url, data_dir)
+
+print(os.listdir(data_dir))  # zeigt Ordner an
