@@ -296,12 +296,17 @@ def gen_train(Gen_Opt):
     # Übergeben der Fakes-Images an den Diskriminator (Versuch den Diskriminator zu täuschen)
     pred = NN_Discriminator(fake_img)
     # Torch.ones gibt einen tensor zurück welcher nur den Wert 1 enthält, und dem Shape Size = BATCH_SIZE
-    target = t.ones(BATCH_SIZE, 1, device=device)
-    loss = F.binary_cross_entropy(pred, target)  # loss_func(pred, target)
+    #target = t.ones(BATCH_SIZE, 1, device=device)
+    # loss = F.binary_cross_entropy(pred, target)  # loss_func(pred, target)
 
-    # Backprop./ Update der Gewichte des Generators
+    loss = -t.mean(pred)
+
     loss.backward()
     Gen_Opt.step()
+
+    # Backprop./ Update der Gewichte des Generators
+    # loss.backward()
+    # Gen_Opt.step()
 
     #print("Training Gen")
     return loss.item()
