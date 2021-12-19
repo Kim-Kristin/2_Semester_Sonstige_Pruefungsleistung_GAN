@@ -48,6 +48,8 @@ import numpy as np
 import os                 # Dient zum lokalen Speichern des Datasets
 import opendatasets as od
 from random import weibullvariate
+from torch.autograd import Variable
+import torch.autograd as autograd
 #!pip install opendatasets
 
 
@@ -65,9 +67,13 @@ NORM = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
 NUM_EPOCH = 20  # Anzahl der Epochen
 LR = 0.00005  # Learningrate
 LATENT_SIZE = 100  # Radom Input für den Generator
-N_CRTIC = 5
-WEIGHT_CLIPPING = 0.01
-
+NUM_EPOCHS = 100
+FEATURES_CRITIC = 16
+FEATURES_GEN = 16
+CRITIC_ITERATIONS = 5
+LAMBDA_GP = 10  # Penalty Koeffizient
+k = 2
+p = 6
 
 # https://jovian.ai/ahmadyahya11/pytorch-gans-anime
 # Ordner für den Download anlegen
@@ -255,6 +261,34 @@ NN_Discriminator = Discriminator().to(device)
 print(NN_Discriminator)
 
 
+"""
+Gradient Penilty
+    "W-Divergenz" wird vorgeschlagen, um "W-Abstand" zu ersetzen
+"""
+Tensor = t.cuda.FloatTensor if device else t.FloatTensor
+
+
+def gp_div(img_real, pred_real, img_fake, pred_fake, k, p):
+    real_grad_out = Variable(
+        Tensor(img_real.size(0), 1).fill_(1.0), requires_grad=False)
+    real_grad = autograd.grad(
+        pred_real, img_real, real_grad_out, create_graph=True, retain_graph=True, only_inputs=True
+    )[0]
+    real_grad_norm = real_grad.view(
+        real_grad.size(0), -1).pow(2).sum(1) ** (p / 2)
+
+    fake_grad_out = Variable(
+        Tensor(img_fake.size(0), 1).fill_(1.0), requires_grad=False)
+    fake_grad = autograd.grad(pred_fake, img_fake, fake_grad_out,
+                              create_graph=True, retain_graph=True, only_inputs=True)[0]
+    fake_grad_norm = fake_grad.view(
+        fake_grad.size(0), -1).pow(2).sum(1) ** (p / 2)
+
+    div_gp = t.mean(real_grad_norm + fake_grad_norm) * k / 2
+
+    return div_gp
+
+
 # Hilfsfunktionen zur Normalisierng von Tensoren und grafischen Darstellung
 def tensor_norm(img_tensors):
     # print (img_tensors)
@@ -417,10 +451,10 @@ def train(NN_Discriminator, NN_Generator, NUM_EPOCH, LR, start_idx=1):
     G_losses = []
     D_losses = []
 
-    Gen_Opt = t.optim.RMSprop(NN_Generator.parameters(),
-                              lr=LR)
-    Dis_Opt = t.optim.RMSprop(NN_Discriminator.parameters(),
-                              lr=LR)
+    Gen_Opt = t.optim.Adam(NN_Generator.parameters(),
+                           lr=LR, betas=(0.5, 0.999))
+    Dis_Opt = t.optim.Adam(NN_Discriminator.parameters(),
+                           lr=LR, betas=(0.5, 0.999))
 
     # Iteration über die Epochen
     for epoch in range(0, NUM_EPOCH):
