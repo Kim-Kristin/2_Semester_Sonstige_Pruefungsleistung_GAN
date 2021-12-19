@@ -65,11 +65,10 @@ WORKERS = 2  # Anzahl der Kerne beim Arbeiten auf der GPU
 # Normalisierung mit 0.5 Mittelwert und Standardabweichung für alle drei Channels der Bilder
 NORM = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
 NUM_EPOCH = 20  # Anzahl der Epochen
-LR = 0.00005  # Learningrate
+LR = 1e-4  # Learningrate
 LATENT_SIZE = 100  # Radom Input für den Generator
 NUM_EPOCHS = 100
 N_CRITIC = 5
-WEIGHT_CLIPPING = 0.01
 LAMBDA_GP = 10  # Penalty Koeffizient
 k = 2
 p = 6
@@ -267,44 +266,23 @@ Gradient Penilty
 Tensor = t.cuda.FloatTensor if device else t.FloatTensor
 
 
-def gp_div(img_real, pred_real, img_fake, pred_fake, k, p):
-    real_grad_out = Variable(
-        Tensor(img_real.size(0), 1).fill_(1.0), requires_grad=False)
-    real_grad = autograd.grad(
-        pred_real, img_real, real_grad_out, create_graph=True, retain_graph=True, only_inputs=True
-    )[0]
-    real_grad_norm = real_grad.view(
-        real_grad.size(0), -1).pow(2).sum(1) ** (p / 2)
-
-    fake_grad_out = Variable(
-        Tensor(img_fake.size(0), 1).fill_(1.0), requires_grad=False)
-    fake_grad = autograd.grad(pred_fake, img_fake, fake_grad_out,
-                              create_graph=True, retain_graph=True, only_inputs=True)[0]
-    fake_grad_norm = fake_grad.view(
-        fake_grad.size(0), -1).pow(2).sum(1) ** (p / 2)
-
-    div_gp = t.mean(real_grad_norm + fake_grad_norm) * k / 2
-
-    return div_gp
-
-
-def gradient_pen(NN_Discriminator, img_real, img_fake):
-
-    interpolates = (random_Tensor*img_real +
-                    ((1-random_Tensor)*img_fake)).requires_grad_(True)
+def gradient_pen(NN_Discriminator, img_real, img_fake, device):
+    BATCH_SIZE, C, H, W = img_real.shape
+    alpha = t.rand((BATCH_SIZE, 1, 1, 1)).repeat(1, C, H, W).to(device)
+    interpolates = (alpha*img_real +
+                    ((1-alpha)*img_fake))
     disc_interpolates = NN_Discriminator(interpolates)
-    fake = Variable(Tensor(img_real.shape[0], 1).fill_(
-        1.0), requires_grad=False)
     grads = autograd.grad(
         outputs=disc_interpolates,
         inputs=interpolates,
-        grad_outputs=fake,
+        grad_outputs=t.ones_like(disc_interpolates),
         create_graph=True,
         retain_graph=True,
         only_inputs=True
     )[0]
-    grads = grads.view(grads.size(0), -1)
-    gp = ((grads.norm(2, dim=1)-1)**2).mean()
+    grads = grads.view(grads.shape[0], -1)
+    grads_norm = grads.norm(2, dim=1)
+    gp = t.mean((grads_norm-1)**2)
     return gp
 
 
@@ -414,7 +392,7 @@ def disc_train(real_images, Dis_Opt):
     # Berechnung des Gesamt-Loss von realen und fake Images
     #loss_sum = loss_real + loss_fake
 
-    gp = gradient_pen(NN_Discriminator, real_images, fake, device=device)
+    gp = gradient_pen(NN_Discriminator, real_images, fake, device)
 
     loss_critic = (-(t.mean(pred_real)-t.mean(pred_fake)) + LAMBDA_GP * gp)
 
