@@ -47,7 +47,7 @@ import torch as t
 import numpy as np
 import os                 # Dient zum lokalen Speichern des Datasets
 import opendatasets as od
-from random import weibullvariate
+from random import random, weibullvariate
 from torch.autograd import Variable
 import torch.autograd as autograd
 #!pip install opendatasets
@@ -68,9 +68,8 @@ NUM_EPOCH = 20  # Anzahl der Epochen
 LR = 0.00005  # Learningrate
 LATENT_SIZE = 100  # Radom Input für den Generator
 NUM_EPOCHS = 100
-FEATURES_CRITIC = 16
-FEATURES_GEN = 16
-CRITIC_ITERATIONS = 5
+N_CRITIC = 5
+WEIGHT_CLIPPING = 0.01
 LAMBDA_GP = 10  # Penalty Koeffizient
 k = 2
 p = 6
@@ -289,6 +288,26 @@ def gp_div(img_real, pred_real, img_fake, pred_fake, k, p):
     return div_gp
 
 
+def gradient_pen(NN_Discriminator, img_real, img_fake):
+
+    interpolates = (random_Tensor*img_real +
+                    ((1-random_Tensor)*img_fake)).requires_grad_(True)
+    disc_interpolates = NN_Discriminator(interpolates)
+    fake = Variable(Tensor(img_real.shape[0], 1).fill_(
+        1.0), requires_grad=False)
+    grads = autograd.grad(
+        outputs=disc_interpolates,
+        inputs=interpolates,
+        grad_outputs=fake,
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True
+    )[0]
+    grads = grads.view(grads.size(0), -1)
+    gp = ((grads.norm(2, dim=1)-1)**2).mean()
+    return gp
+
+
 # Hilfsfunktionen zur Normalisierng von Tensoren und grafischen Darstellung
 def tensor_norm(img_tensors):
     # print (img_tensors)
@@ -328,7 +347,6 @@ def gen_train(Gen_Opt):
 
     # Generierung von Fake-Images
     fake_img = NN_Generator(random_Tensor)
-
     # Übergeben der Fakes-Images an den Diskriminator (Versuch den Diskriminator zu täuschen)
     pred = NN_Discriminator(fake_img)
     # Torch.ones gibt einen tensor zurück welcher nur den Wert 1 enthält, und dem Shape Size = BATCH_SIZE
@@ -396,7 +414,9 @@ def disc_train(real_images, Dis_Opt):
     # Berechnung des Gesamt-Loss von realen und fake Images
     #loss_sum = loss_real + loss_fake
 
-    loss_critic = -(t.mean(pred_real)-t.mean(pred_fake))
+    gp = gradient_pen(NN_Discriminator, real_images, fake, device=device)
+
+    loss_critic = (-(t.mean(pred_real)-t.mean(pred_fake)) + LAMBDA_GP * gp)
 
     loss_critic.backward(retain_graph=True)
 
@@ -462,13 +482,10 @@ def train(NN_Discriminator, NN_Generator, NUM_EPOCH, LR, start_idx=1):
         # Iteration über die Bilder
         for i, (img_real, _) in enumerate(org_loader):
 
-            for _ in range(N_CRTIC):
+            for _ in range(N_CRITIC):
                 # Trainieren des Diskrimniators
                 #d_loss, real_score, fake_score = disc_train(img_real, Dis_Opt)
                 d_loss = disc_train(img_real, Dis_Opt)
-
-                for p in NN_Discriminator.parameters():
-                    p.data.clamp_(-WEIGHT_CLIPPING, WEIGHT_CLIPPING)
 
             # Trainieren des Generators
             g_loss = gen_train(Gen_Opt)
