@@ -1,4 +1,16 @@
-"""
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: comment_questions,-all
+#     formats: ipynb,py:light
+#     text_representation:
+#       extension: .py
+#       format_name: light
+#       format_version: '1.5'
+#       jupytext_version: 1.13.7
+# ---
+
+"""‚
 Wasserstein GAN
 Vorteile:
     - bessere Traings-Stabilität als DCGAN
@@ -48,7 +60,7 @@ import numpy as np
 import os                 # Dient zum lokalen Speichern des Datasets
 import opendatasets as od
 from random import weibullvariate
-#!pip install opendatasets
+# !pip install opendatasets
 
 
 # Pakete importieren
