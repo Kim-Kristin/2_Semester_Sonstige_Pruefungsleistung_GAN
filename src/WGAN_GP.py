@@ -1,38 +1,10 @@
-"""
-Wasserstein GAN
-Vorteile:
-    - bessere Traings-Stabilität als DCGAN
-    -
-Nachteile:
-    - Längeres training
-
- Idee beim GAN:
-    - Distanz zwischen prob generate und prob realistic soll so klein
-    wie möglich sein, um möglichst realistische Bilder zu generieren
-
-Problem:
-    - Wie wird die Distanz zwischen den beiden prob Distributionen
-    beschrieben/ definiert
-
-Lösung:
-    - Wasserstein Distance -> WGAN nutzt Wasserstein Distance für den Loss
-    (- Kullback-Leiber (KL) divergence)
-    (- Jensen-Shannon (JS) divergence) <- Equivalent zum GAN Loss
-        -> Hat Gradienten Probleme die das Training instabil werden lassen
-
-WGAN:
-    - Disc. Maximierung von Expression
-    - Gen.  Minimierung von Expression
-
-Default- Werte im WGAN
-    - LR = 0.00005
-    - Clipping Parameter = 0.01
-    - Batch Size = 64
-    - n_critic = 5 (Anzahl der Iterationen von critic pro generation iteration)
-
-"""
-
-import torch.nn.functional as F  # Loss
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from tqdm.auto import tqdm
+from tkinter.tix import IMAGE
+from matplotlib import image
 from torchvision.utils import save_image  # Speichern von Bildern
 import torch.optim as optim  # Optimierungs-Algorithmen
 import torch.nn as nn  # Neuronales Netz
@@ -50,33 +22,28 @@ import opendatasets as od
 from random import random, weibullvariate
 from torch.autograd import Variable
 import torch.autograd as autograd
-from torchsummary import summary
+
+
+
+# import torch.nn.functional as F  # Loss
 #!pip install opendatasets
-
-
-# Pakete importieren
-# Import Pakete
-# Dient zum Laden des Dataset aus opensource-Quellen (z.B. Kaggle)
-
-# Definieren von Parametern
 
 IMAGE_SIZE = 64  # Größe der Bilder
 BATCH_SIZE = 64  # Anzahl der Batches
 WORKERS = 2  # Anzahl der Kerne beim Arbeiten auf der GPU
 # Normalisierung mit 0.5 Mittelwert und Standardabweichung für alle drei Channels der Bilder
 NORM = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
-NUM_EPOCH = 20  # Anzahl der Epochen
+WORKERS = 2  # Anzahl der Kerne beim Arbeiten auf der GPU
+NUM_EPOCH = 4  # Anzahl der Epochen
 LR = 1e-4  # Learningrate
 LATENT_SIZE = 100  # Radom Input für den Generator
-NUM_EPOCHS = 100
 N_CRITIC = 5
 LAMBDA_GP = 10  # Penalty Koeffizient
-k = 2
-p = 6
+no_of_channels = 3
+cur_step = 0
+display_step = 500
 
-# https://jovian.ai/ahmadyahya11/pytorch-gans-anime
-# Ordner für den Download anlegen
-data_dir = '../data/'
+data_dir = './data/'
 os.makedirs(data_dir, exist_ok=True)  # Anlegen eines Ordners für Bilder
 
 # Erklärung zum Umgang mit Opendata und Kaggle - https://pypi.org/project/opendatasets/
@@ -90,10 +57,11 @@ od.download(dataset_url, data_dir)
 """
 Ausgabe zu den Ordnern
 """
-print(os.listdir(data_dir))  # zeigt Ordner an
+print(os.listdir(data_dir))  # zeigt Ordner an)
 
 # gibt 10 Bezeichnungen von Bildern aus
 print(os.listdir(data_dir+'animefacedataset/images')[:10])
+
 
 # Transformer
 transform = transforms.Compose([
@@ -160,113 +128,111 @@ class DeviceDataLoader():
 
 
 # Dataloader auf dem verfügbaren Device
-org_loader = DeviceDataLoader(org_loader, device)
+dataloader = DeviceDataLoader(org_loader, device)
 
 
-class Generator(t.nn.Module):
-    """
-    Generator 1 Input Layer; 3 Hidden Layer ; 1 Output Layer
-    """
+def get_noise(n_samples, noise_dim, device=device):
+    '''
+    Generate noise vectors from the random normal distribution with dimensions (n_samples, noise_dim),
+    where
+        n_samples: the number of samples to generate based on batch_size
+        noise_dim: the dimension of the noise vector
+        device: device type can be cuda or cpu
+    '''
 
-    def __init__(self):
+    return torch.randn(n_samples, noise_dim, 1, 1, device=device)
+
+
+class Generator(nn.Module):
+    def __init__(self, no_of_channels=no_of_channels, noise_dim=LATENT_SIZE, gen_dim=IMAGE_SIZE):
         super(Generator, self).__init__()
         self.generator = nn.Sequential(
-            # Output = (inputsize - 1)*stride - 2*padding + (kernelsite-1)+1
-            # ConvTranspose2d hilft dabei aus einem kleinen
-            nn.ConvTranspose2d(LATENT_SIZE, IMAGE_SIZE*4, 4, 1, 0, bias=False),
-            # Tensor einen größeren Tensor zu erstellen (Bezogen auf Channels)
-            nn.BatchNorm2d(IMAGE_SIZE*4),
-            nn.ReLU(inplace=True),  # Relu lässt keine negativen werte zu
+            nn.ConvTranspose2d(noise_dim, gen_dim*8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(gen_dim*8),
+            nn.ReLU(True),
 
-            nn.ConvTranspose2d(IMAGE_SIZE*4, IMAGE_SIZE * \
-                               2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(IMAGE_SIZE*2),
-            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(gen_dim*8, gen_dim*4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(gen_dim*4),
+            nn.ReLU(True),
 
-            nn.ConvTranspose2d(IMAGE_SIZE*2, IMAGE_SIZE, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(IMAGE_SIZE),
-            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(gen_dim*4, gen_dim*2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(gen_dim*2),
+            nn.ReLU(True),
 
-            nn.ConvTranspose2d(IMAGE_SIZE, 3, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(gen_dim*2, gen_dim, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(gen_dim),
+            nn.ReLU(True),
 
-            nn.Tanh()  # (-1 und 1) ; Tanh wird häufig verwendet da eine begrenzte Aktivierung es dem Modell ermöglicht,
-            # schneller zu lernen. (https://arxiv.org/pdf/1511.06434.pdf S. 3)
-
-            # Output: 3 x 64 x 64
+            nn.ConvTranspose2d(gen_dim, no_of_channels, 4, 2, 1, bias=False),
+            nn.Tanh()
         )
 
-    # Feedforward
     def forward(self, input):
         output = self.generator(input)
         return output
 
 
-# Erstellen des Generators
-NN_Generator = Generator().to(device)
-print(NN_Generator)
-
-
-class Discriminator (t.nn.Module):
-    """
-    Diskriminator 1 Input Layer; 3 Hidden Layer ; 1 Output Layer
-    """
-
-    def __init__(self):
+class Discriminator(nn.Module):
+    def __init__(self, no_of_channels=no_of_channels, disc_dim=IMAGE_SIZE):
         super(Discriminator, self).__init__()
         self.discriminator = nn.Sequential(
-            # Output = ((inputsize) + 2*padding + (kernelsite-1)-1/stride) -1
-            # conv2d hilft dabei aus einem großem Tensor einen kleinen Tensor zu stellen
-            nn.Conv2d(3, IMAGE_SIZE, 4, 2, 1, bias=False),
-            # Leaky RELU lässt negative Werte zu (nicht wie RELU); Neuronen werden somit nicht auf Null gesetzt
-            nn.LeakyReLU(0.2, inplace=True),
-            # Hilft dem Generator, da dieser nur "Lernen" kann wenn er vom Diskriminator einen Gradienten erhält
 
-            # state size. (IMAGE_SIZE) x 32 x 32
-            nn.Conv2d(IMAGE_SIZE, IMAGE_SIZE * 2, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(IMAGE_SIZE * 2, affine=True),
+            nn.Conv2d(no_of_channels, disc_dim, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
 
-            # state size. (IMAGE_SIZE*2) x 16 x 16
-            nn.Conv2d(IMAGE_SIZE * 2, IMAGE_SIZE * 4, 4, 2, 1, bias=False),
-            nn.InstanceNorm2d(IMAGE_SIZE * 4, affine=True),
+            nn.Conv2d(disc_dim, disc_dim * 2, 4, 2, 1, bias=False),
+            nn.InstanceNorm2d(disc_dim * 2, affine=True),
             nn.LeakyReLU(0.2, inplace=True),
-            # nn.Dropout2d(0.1),  #Dropout
 
-            # state size. (IMAGE_SIZE*4) x 8 x 8
-            nn.Conv2d(IMAGE_SIZE * 4, 1, 4, 2, 0, bias=False)
+            nn.Conv2d(disc_dim * 2, disc_dim * 4, 3, 2, 1, bias=False),
+            nn.InstanceNorm2d(disc_dim * 4, affine=True),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(disc_dim * 4, disc_dim * 8, 3, 2, 1, bias=False),
+            nn.InstanceNorm2d(disc_dim * 8, affine=True),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv2d(disc_dim * 8, 1, 4, 1, 0, bias=False),
 
         )
 
-        # Sigmoid Aktivierungsfunktion
-        # nn.Sigmoid())  # (Werte zwischen 0 und 1); Sigmoid wird verwendet, um zu erkenen wie weit die generierten Bilder von den orginalen abweichen
-
     def forward(self, input):
         output = self.discriminator(input)
-        #output = output.view(output.size(0), -1)
-        return output
+        return output.view(-1, 1).squeeze(1)
+        # return output
 
 
-# Erstellen des Diskriminators
-NN_Discriminator = Discriminator().to(device)
-print(NN_Discriminator)
+gen = Generator().to(device)
+critic = Discriminator().to(device)
 
-print('Critic :')
-summary(NN_Discriminator, (3, IMAGE_SIZE, IMAGE_SIZE))
-print('Generator :')
-summary(NN_Generator, (LATENT_SIZE, 1, 1))
+# Gewichtsinitialisierung
+#  mean 0 and Standardabweichung 0.02
 
 
-"""
-Gradient Penilty
-    "W-Divergenz" wird vorgeschlagen, um "W-Abstand" zu ersetzen
-"""
-Tensor = t.cuda.FloatTensor if device else t.FloatTensor
+def weights_init(m):
+    if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+        torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
+    if isinstance(m, nn.BatchNorm2d):
+        torch.nn.init.normal_(m.weight, mean=0.0, std=0.02)
+        torch.nn.init.constant_(m.bias, val=0)
+
+
+gen = gen.apply(weights_init)
+critic = critic.apply(weights_init)
+
+
+# Optimizer
+
+gen_opt = torch.optim.Adam(gen.parameters(), lr=LR, betas=(0, 0.9))
+critic_opt = torch.optim.Adam(critic.parameters(), lr=LR, betas=(0, 0.9))
+
+# Gradient Penalty
 
 
 def gradient_penalty(critic, real_image, fake_image, device=device):
     batch_size, channel, height, width = real_image.shape
     # alpha is selected randomly between 0 and 1
-    alpha = t.rand(batch_size, 1, 1, 1).repeat(
+    alpha = torch.rand(batch_size, 1, 1, 1).repeat(
         1, channel, height, width).to(device)
     # interpolated image=randomly weighted average between a real and fake image
     # interpolated image ← alpha *real image  + (1 − alpha) fake image
@@ -276,20 +242,21 @@ def gradient_penalty(critic, real_image, fake_image, device=device):
     interpolated_score = critic(interpolatted_image)
 
     # take the gradient of the score wrt to the interpolated image
-    gradient = t.autograd.grad(inputs=interpolatted_image,
-                               outputs=interpolated_score,
-                               retain_graph=True,
-                               create_graph=True,
-                               grad_outputs=t.ones_like(
-                                   interpolated_score)
-                               )[0]
-    gradient = gradient.view(gradient.shape[0], -1).to(device)
-    gradient_norm = gradient.norm(2, dim=1).to(device)
-    gradient_penalty = t.mean((gradient_norm-1)**2).to(device)
+    gradient = torch.autograd.grad(inputs=interpolatted_image,
+                                   outputs=interpolated_score,
+                                   retain_graph=True,
+                                   create_graph=True,
+                                   grad_outputs=torch.ones_like(
+                                       interpolated_score)
+                                   )[0]
+    gradient = gradient.view(gradient.shape[0], -1)
+    gradient_norm = gradient.norm(2, dim=1)
+    gradient_penalty = torch.mean((gradient_norm-1)**2)
     return gradient_penalty
 
-
 # Hilfsfunktionen zur Normalisierng von Tensoren und grafischen Darstellung
+
+
 def tensor_norm(img_tensors):
     # print (img_tensors)
     # print (img_tensors * NORM [1][0] + NORM [0][0])
@@ -303,110 +270,9 @@ def show_images(images, nmax=64):
     plt.title("Fake_Images")
     ax.imshow(make_grid(tensor_norm(images.detach()[:nmax]), nrow=8).permute(
         1, 2, 0).cpu())  # detach() : erstellt eine neue "Ansicht",
-    # sodass diese Operationen nicht mehr verfolgt werden,
+    # sodass diese Operationen nicht mehr verfolgt werden,orm
     # d. h. der Gradient wird nicht berechnet und der Untergraph
     # wird nicht aufgezeichnet > Speicher wird nicht verwendet
-
-
-# Radom Tensor
-
-# Generator --> Input: Random Tensor
-# Generator --> Output: Fake-Images (Batchsize, data_dim, Pixel, Pixel)
-random_Tensor = t.randn(BATCH_SIZE, LATENT_SIZE, 1, 1, device=device)
-fake_images = NN_Generator(random_Tensor)
-print(fake_images.shape)
-
-show_images(fake_images)
-
-
-# Trainieren des Generators
-
-def gen_train(Gen_Opt):
-
-    #Gradienten = 0
-    Gen_Opt.zero_grad()
-
-    # Generierung von Fake-Images
-    fake_img = NN_Generator(random_Tensor)
-    # Übergeben der Fakes-Images an den Diskriminator (Versuch den Diskriminator zu täuschen)
-    pred = NN_Discriminator(fake_img).reshape(-1)
-    # Torch.ones gibt einen tensor zurück welcher nur den Wert 1 enthält, und dem Shape Size = BATCH_SIZE
-    #target = t.ones(BATCH_SIZE, 1, device=device)
-    # loss = F.binary_cross_entropy(pred, target)  # loss_func(pred, target)
-
-    loss = -t.mean(pred)
-
-    loss.backward()
-    Gen_Opt.step()
-
-    # Backprop./ Update der Gewichte des Generators
-    # loss.backward()
-    # Gen_Opt.step()
-
-    #print("Training Gen")
-    return loss.item()
-
-
-# Trainieren des Diskriminators
-
-def disc_train(real_images, Dis_Opt):
-
-    #Gradienten = 0
-    Dis_Opt.zero_grad()
-
-    # ????
-    #data = real_images.to(device)
-    #cur_batch_size = data.shape[0]
-    #noise = t.randn(cur_batch_size, 128, 1, 1).to(device)
-
-    fake = NN_Generator(random_Tensor).to(device)
-
-    # Reale Bilder werden an den Diskriminator übergeben
-    pred_real = NN_Discriminator(real_images).reshape(-1)
-    pred_real = pred_real.to(device)
-    # print(pred_real.size())
-
-    # Kennzeichnen der realen Bilder mit 1
-    #target_real = t.ones(real_images.size(0), 1, device=device)
-    # print(target_real.size())
-
-    # Berechnung des Losses mit realen Bildern
-    #loss_real = F.binary_cross_entropy(pred_real, target_real)
-    #real_score = t.mean(pred_real).item()
-
-    """
-    2 Erstellen von Fake_Bildern
-    """
-    # Generierung von Fakeimages
-    #fake_img = NN_Generator(random_Tensor).to(device)
-
-    """
-    3 Trainieren des Diskriminators auf den erstellten Fake_Bildern
-    """
-    # Fake Bilder werden an den Diskriminator übergeben
-    pred_fake = NN_Discriminator(fake).reshape(-1)
-    pred_fake = pred_fake.to(device)
-
-    # Kennzeichnen der Fake-Bilder mit 0
-    #target_fake = t.zeros(fake_img.size(0), 1, device=device)
-
-    # Loss Function - Fehler des Fake-Batch wird berechnet
-    #loss_fake = F.binary_cross_entropy(pred_fake, target_fake)
-    #fake_score = t.mean(pred_fake).item()
-
-    # Berechnung des Gesamt-Loss von realen und fake Images
-    #loss_sum = loss_real + loss_fake
-
-    gp = gradient_penalty(NN_Discriminator, real_images, fake)
-
-    loss_critic = (-(t.mean(pred_real)-t.mean(pred_fake)) + LAMBDA_GP * gp)
-
-    loss_critic.backward(retain_graph=True)
-
-    Dis_Opt.step()
-
-    #print("Training disc")
-    return loss_critic.item()  # real_score, fake_score
 
 
 """
@@ -417,79 +283,81 @@ dir_gen_samples = '../data/outputs/'
 #os.makedirs('../outputs/dir_gen_samples', exist_ok=True)
 os.makedirs(dir_gen_samples, exist_ok=True)
 
-"""
-Funktion zum Speichern der generierten Bilder
-"""
-
 
 def saves_gen_samples(idx, random_Tensor):
     # Randomisierter Tensor wird an den Generator übergeben
-    fake_img = NN_Generator(random_Tensor)
+    fake_img = gen(random_Tensor)
     # Setzen von Bildbezeichnungen für die Fake_Images
     fake_img_name = "gen_img-{0:0=4d}.png".format(idx)
     # Tensor-Normalisierung; Speichern der Fake_Images im Ordner "Outputs/dir_gen_samples/"
     save_image(tensor_norm(fake_img), os.path.join(
         dir_gen_samples, fake_img_name), nrow=8)
-    show_images(fake_img)  # Plotten der Fake_Images
+    # show_images(fake_img)  # Plotten der Fake_Images
     print("Gespeichert")
 
 
-# Aufruf der Funktion
-saves_gen_samples(0, random_Tensor)
+def display_images(image_tensor, num_images=25, size=(3, 64, 64)):
 
-"""
-Zentrale Trainings-Funktion
-"""
-
-
-def train(NN_Discriminator, NN_Generator, NUM_EPOCH, LR, start_idx=1):
-    t.cuda.empty_cache()  # leert den Cache, wenn auf der GPU gearbeitet wird
-
-    NN_Discriminator.train()
-    NN_Generator.train()
-
-    # Listen für Übersicht des Fortschritts
-    #R_Score = []
-    #F_Score = []
-    G_losses = []
-    D_losses = []
-
-    Gen_Opt = t.optim.Adam(NN_Generator.parameters(),
-                           lr=LR, betas=(0.5, 0.999))
-    Dis_Opt = t.optim.Adam(NN_Discriminator.parameters(),
-                           lr=LR, betas=(0.5, 0.999))
-
-    # Iteration über die Epochen
-    for epoch in range(0, NUM_EPOCH):
-
-        # Iteration über die Bilder
-        for i, (img_real, _) in enumerate(org_loader):
-
-            for _ in range(N_CRITIC):
-                # Trainieren des Diskrimniators
-                d_loss = disc_train(img_real, Dis_Opt)
-
-            # Trainieren des Generators
-            g_loss = gen_train(Gen_Opt)
-
-            Count = i  # Index/ Iterationen zählen
-            print("index:", i, "D_loss:", d_loss, "G_Loss:", g_loss)
-
-        # Speichern des Gesamtlosses von D und G und der Real und Fake Scores
-        D_losses.append(d_loss)
-        G_losses.append(g_loss)
-        # R_Score.append(real_score)
-        # F_Score.append(fake_score)
-
-        # Ausgabe EPOCH, Loss: G und D, Scores: Real und Fake
-        print("Epoch [{}/{}], loss_g: {:.4f}, loss_d: {:.4f}".format(
-            epoch+1, NUM_EPOCH, g_loss, d_loss))  # , real_score, fake_score))
-
-        # Speichern der generierten Samples/ Images
-        saves_gen_samples(epoch+start_idx, random_Tensor)
-
-    return G_losses, D_losses  # , R_Score, F_Score
+    flatten_image = image_tensor.detach().cpu().view(-1, *size)
+    image_grid = make_grid(flatten_image[:num_images], nrow=5)
+    plt.imshow(image_grid.permute(1, 2, 0).squeeze())
+    plt.show()
 
 
-# Aufruf der Trainingsfunktion (Diskriminator & Generator mit der LR & Anzahl der Epochen)
-G_losses, D_losses = train(NN_Discriminator, NN_Generator, NUM_EPOCH, LR)
+# Iteration über Epochen
+for epoch in range(NUM_EPOCH):
+
+    # Iteration über Batches
+    for real_image, _ in tqdm(dataloader):
+        cur_batch_size = real_image.shape[0]
+
+        real_image = real_image.to(device)
+
+        # Iteration über Critic (=Discrimiator) Anzahl
+        for _ in range(N_CRITIC):
+
+            # Generieren von Radom-Noise
+            fake_noise = get_noise(cur_batch_size, LATENT_SIZE, device=device)
+            fake = gen(fake_noise)
+
+            # Trainieren des Critics (=Discriminator)
+            critic_fake_pred = critic(fake).reshape(-1)
+            critic_real_pred = critic(real_image).reshape(-1)
+
+            # Berechnung: gradient penalty auf den realen and fake Images (Generiert durch Generator)
+            gp = gradient_penalty(critic, real_image, fake, device)
+            critic_loss = -(torch.mean(critic_real_pred) -
+                            torch.mean(critic_fake_pred)) + LAMBDA_GP * gp
+
+            # Gradient = 0
+            critic.zero_grad()
+
+            # Backprop. + Aufzeichnen dynamischen Graphen
+            critic_loss.backward(retain_graph=True)
+
+            # Update Optimizer
+            critic_opt.step()
+
+        # Trainieren des Generators: max E[critic(gen_fake)] <-> min -E[critic(gen_fake)]
+        gen_fake = critic(fake).reshape(-1)
+        gen_loss = -torch.mean(gen_fake)
+
+        # Gradient = 0
+        gen.zero_grad()
+
+        # Backprop.
+        gen_loss.backward()
+
+        # Update optimizer
+        gen_opt.step()
+
+        ## Visualization code ##
+        if cur_step % display_step == 0 and cur_step > 0:
+            print(
+                f"Step {cur_step}: Generator loss: {gen_loss}, critic loss: {critic_loss}")
+            display_images(fake)
+            display_images(real_image)
+            gen_loss = 0
+            critic_loss = 0
+            saves_gen_samples(cur_step, fake_noise)
+        cur_step += 1
